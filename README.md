@@ -1,6 +1,6 @@
 <div align="center">
 
-![StarCore MedLink](assets/logo.png)
+<img src="assets/logo.png" alt="StarCore MedLink" width="80" />
 
 <h1>StarCore MedLink</h1>
 
