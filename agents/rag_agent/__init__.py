@@ -182,12 +182,11 @@ class MedicalRAG:
 
             # Step 2: Retrieval
             self.logger.info(f"2. Retrieving relevant documents for the query: '{query}'")
-            vectorstore, docstore = self.vector_store.load_vectorstore()
+            vectorstore = self.vector_store.load_vectorstore()
             retrieved_documents = self.vector_store.retrieve_relevant_chunks(
                 query=query,
                 vectorstore=vectorstore,
-                docstore=docstore,
-                )
+            )
 
             self.logger.info(f"   Retrieved {len(retrieved_documents)} relevant document chunks")
 

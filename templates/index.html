@@ -1004,13 +1004,15 @@
                 if (e.target.files.length > 0) {
                     const file = e.target.files[0];
                     const reader = new FileReader();
-                    
+
                     reader.onload = function(e) {
                         previewImage.src = e.target.result;
                         previewContainer.style.display = 'block';
                     };
-                    
+
                     reader.readAsDataURL(file);
+                    // Auto-focus textarea so user can type a description
+                    messageInput.focus();
                 }
             });
             

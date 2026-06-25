@@ -172,8 +172,11 @@ cython_debug/
 
 .vscode
 
-# ignore large model files - download from gdrive
+# ignore large model files — downloaded via gdown on first use
 *.tar
+*.pth
+*.pt
+*.pth.tar
 
 # ignore locally saved audio
 *.mp3

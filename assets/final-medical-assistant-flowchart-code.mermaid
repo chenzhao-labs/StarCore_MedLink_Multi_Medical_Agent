@@ -1,0 +1,69 @@
+flowchart TD
+    %% Entry
+    UserInput[User Input: Text / Image / Speech] --> AnalyzeInput[analyze_input]
+
+    %% analyze_input
+    AnalyzeInput -->|Text| InputGuardrails[Input Guardrails\nRule-based + LLM filtering]
+    AnalyzeInput -->|Image| ImageClassify[Image Classification\nVision LLM: MRI / X-Ray / Skin / Other]
+    InputGuardrails -->|Blocked| ApplyGuardrails
+    ImageClassify --> EnrichContext[enrich_context]
+
+    %% enrich_context
+    EnrichContext --> HealthIntent{Health Intent?\nKeyword detection}
+    HealthIntent -->|Yes| SemanticSearch[Semantic Search personal_health_facts\nQdrant Dense + BM25]
+    HealthIntent -->|No| RouteAgent[route_to_agent]
+    SemanticSearch --> RouteAgent
+
+    %% route_to_agent
+    RouteAgent --> DecisionLLM[Decision LLM\nRoute by intent + context + image type]
+
+    %% Agents
+    DecisionLLM --> ConversationAgent[CONVERSATION_AGENT\nInjected with personal health context]
+    DecisionLLM --> RAGAgent[RAG_AGENT\nQdrant hybrid search + Cross-Encoder rerank]
+    DecisionLLM --> WebSearchAgent[WEB_SEARCH_AGENT\nTavily real-time search]
+    DecisionLLM --> BrainTumorAgent[BRAIN_TUMOR_AGENT\nU-Net MRI segmentation]
+    DecisionLLM --> ChestXrayAgent[CHEST_XRAY_AGENT\nDenseNet121 classification]
+    DecisionLLM --> SkinLesionAgent[SKIN_LESION_AGENT\nU-Net skin lesion segmentation]
+
+    %% RAG confidence routing
+    RAGAgent --> RAGCheck{Confidence Check}
+    RAGCheck -->|Low Confidence| WebSearchAgent
+    RAGCheck -->|High Confidence| CheckValidation[check_validation]
+
+    %% Validation
+    ConversationAgent --> CheckValidation
+    WebSearchAgent --> CheckValidation
+    BrainTumorAgent --> CheckValidation
+    ChestXrayAgent --> CheckValidation
+    SkinLesionAgent --> CheckValidation
+
+    %% check_validation
+    CheckValidation --> NeedsValidation{needs_human_validation?}
+    NeedsValidation -->|Yes| HumanValidation[human_validation\nMedical image requires manual confirmation]
+    NeedsValidation -->|No| ApplyGuardrails[apply_guardrails\nOutput guardrails]
+
+    HumanValidation --> ApplyGuardrails
+
+    %% End
+    ApplyGuardrails --> Response[Response: Text + Image]
+
+    %% Style definitions
+    classDef entry fill:#A9A9A9,stroke:#000,stroke-width:2px,color:#000
+    classDef process fill:#FFD700,stroke:#000,stroke-width:2px,color:#000
+    classDef decision fill:#ff6666,stroke:#000,stroke-width:2px,color:#000
+    classDef agent fill:#7CFC00,stroke:#000,stroke-width:2px,color:#000
+    classDef cvagent fill:#ff9966,stroke:#000,stroke-width:2px,color:#000
+    classDef validation fill:#FFDAB9,stroke:#000,stroke-width:2px,color:#000
+    classDef output fill:#87CEEB,stroke:#000,stroke-width:2px,color:#000
+    classDef search fill:#9966ff,stroke:#000,stroke-width:2px,color:#000
+    classDef guardrail fill:#FFD700,stroke:#000,stroke-width:2px,color:#000
+
+    class UserInput entry
+    class AnalyzeInput,EnrichContext,SemanticSearch,ImageClassify process
+    class HealthIntent,RAGCheck,NeedsValidation,DecisionLLM,RouteAgent decision
+    class InputGuardrails,ApplyGuardrails guardrail
+    class ConversationAgent,RAGAgent agent
+    class WebSearchAgent search
+    class BrainTumorAgent,ChestXrayAgent,SkinLesionAgent cvagent
+    class CheckValidation,HumanValidation validation
+    class Response output

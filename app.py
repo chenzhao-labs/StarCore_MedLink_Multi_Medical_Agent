@@ -123,10 +123,10 @@ def chat(
         if response_data["agent_name"] == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
             segmentation_path = os.path.join(SKIN_LESION_OUTPUT, "segmentation_plot.png")
             if os.path.exists(segmentation_path):
-                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png"
+                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png?v={int(time.time())}"
             else:
                 logger.warning("Skin Lesion Output path does not exist.")
-        
+
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -166,8 +166,9 @@ async def chat_stream(
 
 @app.post("/upload")
 async def upload_image(
+    request: Request,
     response: Response,
-    image: UploadFile = File(...), 
+    image: UploadFile = File(...),
     text: str = Form(""),
     session_id: Optional[str] = Cookie(None)
 ):
@@ -225,10 +226,10 @@ async def upload_image(
         if response_data["agent_name"] == "SKIN_LESION_AGENT, HUMAN_VALIDATION":
             segmentation_path = os.path.join(SKIN_LESION_OUTPUT, "segmentation_plot.png")
             if os.path.exists(segmentation_path):
-                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png"
+                result["result_image"] = f"/uploads/skin_lesion_output/segmentation_plot.png?v={int(time.time())}"
             else:
                 logger.warning("Skin Lesion Output path does not exist.")
-        
+
         # Remove temporary file after sending
         try:
             os.remove(file_path)

@@ -250,5 +250,76 @@ def build_health_context(profile_id: str) -> str:
     return "Patient health context:\n" + "\n".join(f"  - {p}" for p in parts)
 
 
+def get_fact_chunks(profile_id: str) -> list[str]:
+    """Split health profile + recent logs into individual, embeddable fact strings.
+
+    Each fact stands alone semantically so that embedding-based retrieval can
+    match "最近容易累" to "患者有贫血史" without pulling in unrelated data.
+    """
+    profile = get_profile(profile_id)
+    if not profile:
+        return []
+
+    facts = []
+
+    # ── Demographics ──
+    if profile.get("age"):
+        facts.append(f"患者年龄 {profile['age']} 岁")
+    if profile.get("gender"):
+        facts.append(f"患者性别为 {profile['gender']}")
+    if profile.get("height") and profile.get("weight"):
+        bmi = round(profile["weight"] / ((profile["height"] / 100) ** 2), 1)
+        facts.append(f"患者身高 {profile['height']}cm，体重 {profile['weight']}kg，BMI 为 {bmi}")
+
+    # ── Chronic conditions ──
+    for c in profile.get("conditions", []):
+        facts.append(f"患者患有 {c}")
+
+    # ── Medications ──
+    for m in profile.get("medications", []):
+        if isinstance(m, dict):
+            text = f"患者正在服用 {m.get('name', '')}"
+            if m.get("dose"):
+                text += f"，剂量 {m['dose']}"
+            if m.get("frequency"):
+                text += f"，{m['frequency']}"
+            facts.append(text)
+        else:
+            facts.append(f"患者正在服用 {m}")
+
+    # ── Allergies ──
+    for a in profile.get("allergies", []):
+        facts.append(f"患者对 {a} 过敏")
+
+    # ── Past surgeries ──
+    for s in profile.get("surgeries", []):
+        facts.append(f"患者曾接受 {s}")
+
+    # ── Notes ──
+    if profile.get("notes"):
+        facts.append(f"患者备注：{profile['notes']}")
+
+    # ── Recent health logs (last 30 entries) ──
+    recent = get_logs(limit=30)
+    for log in recent:
+        val = log["value"]
+        ts = log["recorded_at"][:10]
+        lt = log["log_type"]
+        if lt == "blood_pressure":
+            facts.append(f"[{ts}] 血压：收缩压 {val.get('systolic','?')}mmHg，舒张压 {val.get('diastolic','?')}mmHg")
+        elif lt == "blood_glucose":
+            facts.append(f"[{ts}] 血糖：{val.get('value','?')} mmol/L")
+        elif lt == "weight":
+            facts.append(f"[{ts}] 体重：{val.get('value','?')} kg")
+        elif lt == "medication":
+            facts.append(f"[{ts}] 用药记录：{val.get('name','?')}，依从性 {val.get('adherence','?')}")
+        elif lt == "symptom":
+            facts.append(f"[{ts}] 症状记录：{val.get('description','?')}")
+        else:
+            facts.append(f"[{ts}] {lt}：{val}")
+
+    return facts
+
+
 # Auto-init on import
 init_db()

@@ -70,8 +70,9 @@ class UNet(nn.Module):
 class SkinLesionSegmentation:
     """Handles skin lesion segmentation using a trained U-Net model."""
 
-    def __init__(self, model_path):
+    def __init__(self, model_path, gdrive_file_id=None):
         self.model_path = model_path
+        self.gdrive_file_id = gdrive_file_id
         self.device = DEVICE
         self.model = None  # lazy load on first use
 
@@ -80,15 +81,14 @@ class SkinLesionSegmentation:
         if self.model is not None:
             return True
 
-        ok = download_model_checkpoint(
-            "1rvn4ucOH6UBoNk-GB9bUWuGTLkNIVUf0", self.model_path
-        )
-        if not ok:
-            logger.error(
-                "Skin lesion model not available. "
-                "Skin lesion segmentation will be disabled."
-            )
-            return False
+        if self.gdrive_file_id:
+            ok = download_model_checkpoint(self.gdrive_file_id, self.model_path)
+            if not ok:
+                logger.error(
+                    "Skin lesion model not available. "
+                    "Skin lesion segmentation will be disabled."
+                )
+                return False
 
         try:
             model = UNet(n_channels=3, n_classes=1).to(self.device)

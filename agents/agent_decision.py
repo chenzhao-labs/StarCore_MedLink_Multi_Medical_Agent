@@ -22,6 +22,8 @@ from agents.web_search_processor_agent import WebSearchProcessorAgent
 from agents.image_analysis_agent import ImageAnalysisAgent
 from agents.guardrails.local_guardrails import LocalGuardrails
 from agents.streaming import TokenQueue, TokenCallback
+from agents.fact_indexer import FactIndexer
+import health_db
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -45,18 +47,43 @@ memory = SqliteSaver(checkpoint_conn)
 # Specify a thread
 thread_config = {"configurable": {"thread_id": "1"}}
 
+# ── Health intent detection (Phase 0: keyword-based, Phase 2: LLM) ──
+
+_HEALTH_KEYWORDS = [
+    # 症状
+    "头痛", "头晕", "发烧", "发热", "咳嗽", "腹痛", "胸痛", "背痛", "关节痛",
+    "恶心", "呕吐", "腹泻", "便秘", "乏力", "疲劳", "失眠", "心慌", "气短",
+    "不舒服", "难受", "疼痛", "肿胀", "出血", "麻木", "刺痛", "痒",
+    # 疾病
+    "血压", "血糖", "糖尿病", "高血压", "高血脂", "心脏病", "冠心病",
+    "过敏", "哮喘", "贫血", "感染", "炎症", "肿瘤", "癌症", "中风",
+    "抑郁", "焦虑", "甲状腺", "痛风", "关节炎", "骨质疏松",
+    # 用药
+    "吃药", "用药", "药物", "药", "副作用", "剂量", "禁忌", "处方",
+    # 诊疗
+    "症状", "诊断", "治疗", "手术", "检查", "体检", "化验", "复查",
+    "康复", "预后", "预防", "疫苗",
+    # 生活方式
+    "饮食", "运动", "减肥", "体重", "身高", "BMI",
+    # English
+    "headache", "fever", "cough", "pain", "symptom", "diagnosis",
+    "blood pressure", "glucose", "diabetes", "hypertension",
+    "medication", "drug", "dose", "allergy", "infection",
+    "treatment", "surgery", "therapy", "chronic",
+]
+
+
+def _detect_health_intent(text: str) -> bool:
+    """Keyword-based health intent detection. Returns True if the query is health-related."""
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in _HEALTH_KEYWORDS)
+
 
 # Agent that takes the decision of routing the request further to correct task specific agent
 class AgentConfig:
     """Configuration settings for the agent decision system."""
     
-    # Decision model
-    DECISION_MODEL = "gpt-4o"  # or whichever model you prefer
-    
-    # Vision model for image analysis
-    VISION_MODEL = "gpt-4o"
-    
-    # Confidence threshold for responses
+    # Confidence threshold for decisions
     CONFIDENCE_THRESHOLD = 0.85
     
     # System instructions for the decision agent
@@ -102,6 +129,8 @@ class AgentState(MessagesState):
     retrieval_confidence: float  # Confidence in retrieval (for RAG agent)
     bypass_routing: bool  # Flag to bypass agent routing for guardrails
     insufficient_info: bool  # Flag indicating RAG response has insufficient information
+    enriched_context: Optional[str]  # Health facts retrieved on-demand (Phase 0.4)
+    profile_id: Optional[str]  # User profile ID for scoped personal health search
 
 
 class AgentDecision(TypedDict):
@@ -120,6 +149,10 @@ def create_agent_graph():
     # Initialize guardrails with the same LLM used elsewhere
     guardrails = LocalGuardrails(app_config.rag.llm)
 
+    # Initialize FactIndexer for personal health fact retrieval (Phase 0.4)
+    fact_indexer = FactIndexer(app_config)
+    fact_indexer.ensure_collection()
+
     # LLM
     decision_model = app_config.agent_decision.llm
     
@@ -135,6 +168,36 @@ def create_agent_graph():
     # Create the decision chain
     decision_chain = decision_prompt | decision_model | json_parser
     
+    def enrich_context(state: AgentState) -> AgentState:
+        """Retrieve personal health facts + medical knowledge on-demand (Phase 0.4).
+
+        Only triggers for health-related queries. Non-health queries pass through.
+        Searches the personal_health_facts Qdrant collection scoped to the user profile.
+        """
+        current_input = state.get("current_input", "")
+        input_text = ""
+        if isinstance(current_input, str):
+            input_text = current_input
+        elif isinstance(current_input, dict):
+            input_text = current_input.get("text", "")
+
+        if not input_text or not _detect_health_intent(input_text):
+            return {**state, "enriched_context": None}
+
+        profile_id = state.get("profile_id") or "default"
+
+        try:
+            facts = fact_indexer.search(input_text, profile_id, k=5)
+            if facts:
+                context_parts = [f"- {f['content']}" for f in facts]
+                enriched = "Personal health context (retrieved from your health profile):\n" + "\n".join(context_parts)
+            else:
+                enriched = None
+        except Exception:
+            enriched = None
+
+        return {**state, "enriched_context": enriched, "profile_id": profile_id}
+
     # Define graph state transformations
     def analyze_input(state: AgentState) -> AgentState:
         """Analyze the input to detect images and determine input type."""
@@ -183,7 +246,7 @@ def create_agent_graph():
         """Check if we should bypass normal routing due to guardrails."""
         if state.get("bypass_routing", False):
             return "apply_guardrails"
-        return "route_to_agent"
+        return "enrich_context"
     
     def route_to_agent(state: AgentState) -> Dict:
         """Make decision about which agent should handle the query."""
@@ -268,10 +331,15 @@ def create_agent_graph():
                 # print("######### DEBUG 2:", msg)
                 recent_context += f"Assistant: {msg.content}\n"
         
+        # Personal health context (Phase 0.4: on-demand retrieval)
+        enriched = state.get("enriched_context") or ""
+
         # Combine everything for the decision input
         conversation_prompt = f"""User query: {input_text}
 
         Recent conversation context: {recent_context}
+
+        {enriched}
 
         You are an AI-powered Medical Conversation Assistant. Your goal is to facilitate smooth and informative conversations with users, handling both casual and medical-related queries. You must respond naturally while ensuring medical accuracy and clarity.
 
@@ -355,8 +423,20 @@ def create_agent_graph():
         rag_agent = MedicalRAG(app_config)
 
         messages = state["messages"]
-        query = state["current_input"]
+        raw_query = state["current_input"]
         rag_context_limit = app_config.rag.context_limit
+
+        # Inject personal health context into query (Phase 0.4)
+        enriched = state.get("enriched_context")
+        query_text = ""
+        if isinstance(raw_query, str):
+            query_text = raw_query
+        elif isinstance(raw_query, dict):
+            query_text = raw_query.get("text", "")
+        if enriched:
+            query = f"{enriched}\n\nUser query: {query_text}"
+        else:
+            query = raw_query
 
         recent_context = ""
         for msg in messages[-rag_context_limit:]:# limit controlled from config
@@ -447,8 +527,18 @@ def create_agent_graph():
 
         web_search_processor = WebSearchProcessorAgent(app_config)
 
+        # Inject personal health context into query (Phase 0.4)
+        enriched = state.get("enriched_context")
+        raw_query = state["current_input"]
+        query_text = ""
+        if isinstance(raw_query, str):
+            query_text = raw_query
+        elif isinstance(raw_query, dict):
+            query_text = raw_query.get("text", "")
+        ws_query = f"{enriched}\n\nUser query: {query_text}" if enriched else raw_query
+
         processed_response = web_search_processor.process_web_search_results(
-            query=state["current_input"],
+            query=ws_query,
             chat_history=recent_context,
             token_queue=token_queue,
         )
@@ -487,12 +577,40 @@ def create_agent_graph():
 
         logger.info("Selected agent: BRAIN_TUMOR_AGENT")
 
-        response = AIMessage(content="This would be handled by the brain tumor agent, analyzing the MRI image.")
+        current_input = state["current_input"]
+        image_path = current_input.get("image", None)
+
+        try:
+            result = AgentConfig.image_analyzer.segment_brain_tumor(image_path)
+            if result.get("has_tumor"):
+                response_text = (
+                    f"Brain tumor segmentation complete.\n\n"
+                    f"Tumor region detected, occupying approximately {result['tumor_ratio']}% of the image.\n\n"
+                    f"**Important:** This is an AI-generated analysis, not a medical diagnosis. "
+                    f"Please consult a neurologist or radiologist for professional evaluation."
+                )
+            else:
+                response_text = (
+                    "Brain tumor segmentation complete.\n\n"
+                    "No significant tumor region detected.\n\n"
+                    "**Important:** This is an AI-generated analysis, not a medical diagnosis. "
+                    "A negative result does not rule out pathology. "
+                    "Please consult a healthcare professional if you have concerns."
+                )
+        except Exception as e:
+            logger.warning("Brain tumor segmentation failed: %s", e)
+            response_text = (
+                "Brain tumor analysis could not be completed. "
+                "The model may not be available. "
+                "Please ensure the brain tumor model checkpoint is downloaded and placed at the correct path."
+            )
+
+        response = AIMessage(content=response_text)
 
         return {
             **state,
             "output": response,
-            "needs_human_validation": True,  # Medical diagnosis always needs validation
+            "needs_human_validation": True,
             "agent_name": "BRAIN_TUMOR_AGENT"
         }
     
@@ -636,6 +754,7 @@ def create_agent_graph():
     
     # Add nodes for each step
     workflow.add_node("analyze_input", analyze_input)
+    workflow.add_node("enrich_context", enrich_context)
     workflow.add_node("route_to_agent", route_to_agent)
     workflow.add_node("CONVERSATION_AGENT", run_conversation_agent)
     workflow.add_node("RAG_AGENT", run_rag_agent)
@@ -656,9 +775,12 @@ def create_agent_graph():
         check_if_bypassing,
         {
             "apply_guardrails": "apply_guardrails",
-            "route_to_agent": "route_to_agent"
+            "enrich_context": "enrich_context"
         }
     )
+
+    # enrich_context always goes to route_to_agent next
+    workflow.add_edge("enrich_context", "route_to_agent")
     
     # Connect decision router to agents
     workflow.add_conditional_edges(
@@ -714,7 +836,9 @@ def init_agent_state() -> AgentState:
         "needs_human_validation": False,
         "retrieval_confidence": 0.0,
         "bypass_routing": False,
-        "insufficient_info": False
+        "insufficient_info": False,
+        "enriched_context": None,
+        "profile_id": None,
     }
 
 
@@ -742,7 +866,9 @@ def process_query(
     state["current_input"] = query
 
     if isinstance(query, dict):
-        query = query.get("text", "") + ", user uploaded an image for diagnosis."
+        text = query.get("text", "").strip()
+        suffix = "User uploaded an image for medical diagnosis."
+        query = f"{text}. {suffix}" if text else suffix
 
     state["messages"] = [HumanMessage(content=query)]
 

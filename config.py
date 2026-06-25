@@ -7,7 +7,8 @@ Default: DashScope (阿里云百炼). Switch by changing LLM_BASE_URL / LLM_API_
 
 import os
 from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_openai import ChatOpenAI
+from utils.dashscope_embeddings import DashScopeEmbeddings
 
 load_dotenv()
 
@@ -46,10 +47,9 @@ def _create_vision_llm(temperature=0.1):
 
 
 def _create_embeddings():
-    return OpenAIEmbeddings(
+    return DashScopeEmbeddings(
         model=os.getenv("EMBEDDING_MODEL", "text-embedding-v3"),
-        openai_api_key=EMBEDDING_API_KEY,
-        openai_api_base=EMBEDDING_BASE_URL,
+        api_key=LLM_API_KEY,
     )
 
 
@@ -101,9 +101,25 @@ class RAGConfig:
 
 class MedicalCVConfig:
     def __init__(self):
-        self.brain_tumor_model_path = "./agents/image_analysis_agent/brain_tumor_agent/models/brain_tumor_segmentation.pth"
-        self.chest_xray_model_path = "./agents/image_analysis_agent/chest_xray_agent/models/covid_chest_xray_model.pth"
-        self.skin_lesion_model_path = "./agents/image_analysis_agent/skin_lesion_agent/models/checkpointN25_.pth.tar"
+        # Local paths (overridable via .env)
+        self.brain_tumor_model_path = os.getenv(
+            "BRAIN_TUMOR_MODEL_PATH",
+            "./agents/image_analysis_agent/brain_tumor_agent/models/unet.pt",
+        )
+        self.chest_xray_model_path = os.getenv(
+            "CHEST_XRAY_MODEL_PATH",
+            "./agents/image_analysis_agent/chest_xray_agent/models/covid_chest_xray_model.pth",
+        )
+        self.skin_lesion_model_path = os.getenv(
+            "SKIN_LESION_MODEL_PATH",
+            "./agents/image_analysis_agent/skin_lesion_agent/models/checkpointN25_.pth.tar",
+        )
+        # Google Drive file IDs for gdown auto-download (overridable via .env)
+        self.brain_tumor_gdrive_id = os.getenv("BRAIN_TUMOR_GDRIVE_ID", "")
+        self.chest_xray_gdrive_id = os.getenv("CHEST_XRAY_GDRIVE_ID", "")
+        self.skin_lesion_gdrive_id = os.getenv(
+            "SKIN_LESION_GDRIVE_ID", "1rvn4ucOH6UBoNk-GB9bUWuGTLkNIVUf0"
+        )
         self.skin_lesion_segmentation_output_path = "./uploads/skin_lesion_output/segmentation_plot.png"
         self.llm = _create_vision_llm(temperature=0.1)
 

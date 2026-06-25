@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Send, Paperclip, Mic, Trash2, Stethoscope, Plus, MessageCircle, PanelLeftClose, PanelLeft, CircleStop } from "./icons";
-import { streamChat, uploadImage, transcribeAudio, getProfile } from "@/api/client";
+import { streamChat, uploadImage, transcribeAudio } from "@/api/client";
 
 type Msg = {
   role: "user" | "ai";
@@ -75,7 +75,7 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [healthContext, setHealthContext] = useState<string>("");
+  const [pendingImage, setPendingImage] = useState<{ file: File; preview: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -93,23 +93,6 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
-  // Load health context for injection
-  useEffect(() => {
-    getProfile().then((p) => {
-      const parts: string[] = [];
-      if (p?.age) parts.push(`Age ${p.age}`);
-      if (p?.gender) parts.push(p.gender);
-      if (p?.height) parts.push(`${p.height}cm`);
-      if (p?.weight) parts.push(`${p.weight}kg`);
-      if (p?.conditions?.length) parts.push(`Conditions: ${p.conditions.join(", ")}`);
-      if (p?.medications?.length) parts.push(`Meds: ${p.medications.map((m: any) => m.name || m).join(", ")}`);
-      if (p?.allergies?.length) parts.push(`Allergies: ${p.allergies.join(", ")}`);
-      if (p?.surgeries?.length) parts.push(`Surgeries: ${p.surgeries.join(", ")}`);
-      if (p?.notes) parts.push(`Notes: ${p.notes}`);
-      setHealthContext(parts.length ? parts.join(" | ") : "");
-    }).catch(() => {});
-  }, []);
 
   // Auto-create first convo if none exist
   useEffect(() => {
@@ -203,10 +186,7 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
     try {
       let fullText = "";
       let agentName = "";
-      const query = healthContext
-        ? `[Patient context: ${healthContext}]\n\nUser query: ${text}`
-        : text;
-      for await (const evt of streamChat(query, activeConvo.threadId, controller.signal)) {
+      for await (const evt of streamChat(text, activeConvo.threadId, controller.signal)) {
         if (evt.type === "agent") {
           agentName = evt.name;
           updateLastAi((m) => ({ ...m, agent: agentName }));
@@ -233,48 +213,64 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
     }
   };
 
-  const handleSend = () => sendText(input);
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (pendingImage) URL.revokeObjectURL(pendingImage.preview);
+    setPendingImage({ file, preview: URL.createObjectURL(file) });
+  };
+
+  const clearPendingImage = () => {
+    if (pendingImage) {
+      URL.revokeObjectURL(pendingImage.preview);
+      setPendingImage(null);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() && !pendingImage) return;
+    if (loading || !activeConvo) return;
+
+    if (pendingImage) {
+      // Image + optional text
+      const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const isFirstMsg = messages.length === 0;
+      const displayText = input.trim() || "Image uploaded";
+      addMessage({ role: "user", text: displayText, time: t, image: pendingImage.preview });
+      setInput("");
+      setLoading(true);
+      setError(null);
+      addMessage({ role: "ai", text: "", time: t, streaming: true });
+
+      if (isFirstMsg) {
+        const title = displayText.slice(0, 40);
+        setConvos((prev) => prev.map((c) => c.id === activeId ? { ...c, title } : c));
+      }
+
+      try {
+        const data = await uploadImage(pendingImage.file, input.trim(), activeConvo.threadId);
+        updateLastAi((m) => ({
+          ...m,
+          text: data.response,
+          agent: data.agent,
+          image: data.result_image || undefined,
+          streaming: false,
+        }));
+      } catch (e: any) {
+        updateLastAi((m) => ({ ...m, text: `Upload failed: ${e.message}`, streaming: false }));
+        setError(e.message);
+      } finally {
+        setLoading(false);
+        clearPendingImage();
+      }
+    } else {
+      sendText(input);
+    }
+  };
 
   const stopGeneration = () => {
     abortRef.current?.abort();
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || loading || !activeConvo) return;
-    const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const previewUrl = URL.createObjectURL(file);
-    const isFirstMsg = messages.length === 0;
-    const uploadText = healthContext
-      ? `[Patient context: ${healthContext}]\n\nUser query: ${input || "Image uploaded"}`
-      : (input || "Image uploaded");
-    addMessage({ role: "user", text: uploadText, time: t, image: previewUrl });
-    setInput("");
-    setLoading(true);
-    setError(null);
-    addMessage({ role: "ai", text: "", time: t, streaming: true });
-
-    if (isFirstMsg) {
-      const title = (input || "Image Analysis").slice(0, 40);
-      setConvos((prev) => prev.map((c) => c.id === activeId ? { ...c, title } : c));
-    }
-
-    try {
-      const data = await uploadImage(file, input, activeConvo.threadId);
-      updateLastAi((m) => ({
-        ...m,
-        text: data.response,
-        agent: data.agent,
-        image: data.result_image || undefined,
-        streaming: false,
-      }));
-    } catch (e: any) {
-      updateLastAi((m) => ({ ...m, text: `Upload failed: ${e.message}`, streaming: false }));
-      setError(e.message);
-    } finally {
-      setLoading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
   };
 
   const startRecording = async () => {
@@ -492,14 +488,35 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
           type="file"
           accept="image/png,image/jpeg,image/jpg"
           className="hidden"
-          onChange={handleFileUpload}
+          onChange={handleFileSelect}
         />
         <div className="shrink-0 border-t border-border/40 px-6 py-4">
+          {/* Pending image preview */}
+          {pendingImage && (
+            <div className="mb-2 flex items-center gap-2">
+              <img src={pendingImage.preview} alt="Preview" className="h-12 w-12 rounded-lg object-cover border border-border/60" />
+              <span className="text-[12px] text-muted truncate flex-1">{pendingImage.file.name}</span>
+              <button
+                onClick={clearPendingImage}
+                className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-red-50 hover:text-red-500 transition-colors"
+                title="Remove image"
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
           <div className="mx-auto flex max-w-3xl items-center gap-2.5 rounded-2xl border border-border/60 bg-white/90 px-4 py-2.5 shadow-sm focus-within:border-primary focus-within:shadow-[0_0_0_3px_rgba(43,136,248,0.08)] transition-all">
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                fileInputRef.current?.click();
+              }}
               disabled={loading}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-muted hover:bg-soft hover:text-primary transition-colors disabled:opacity-40"
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors disabled:opacity-40 ${
+                pendingImage ? "text-primary bg-primary/10" : "text-muted hover:bg-soft hover:text-primary"
+              }`}
               title="Upload medical image"
             >
               <Paperclip className="h-5 w-5" />
@@ -535,7 +552,7 @@ export default function ChatPage({ onNavigate }: { onNavigate?: () => void }) {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!input.trim() && !pendingImage}
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white shadow-[0_4px_12px_-4px_rgba(43,136,248,0.55)] hover:bg-primary-dark active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                 title="Send"
               >

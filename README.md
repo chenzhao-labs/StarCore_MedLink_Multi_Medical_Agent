@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="StarCore MedLink" width="80" />
+<img src="assets/logo.png" alt="StarCore MedLink" width="140" />
 
 <h1>StarCore MedLink</h1>
 
-**星核医联 · Agent 驱动的智慧医疗平台**（持续进行中....）
+**星核互联 · 个人健康 AI 伙伴**
 
-多 Agent 协作的医学 AI 系统，集成 RAG 文献检索、医学影像分析、网络搜索和个人健康档案管理。
+多 Agent 协作的个性化医学 AI 系统 —— 记住你的完整健康历史，在任何医学咨询场景下提供"结合个人情况"的回答。
 
 ![Python - Version](https://img.shields.io/badge/PYTHON-3.11+-blue?style=for-the-badge&logo=python&logoColor=white)
 ![LangGraph - Version](https://img.shields.io/badge/LangGraph-1.2+-teal?style=for-the-badge&logo=langgraph)
@@ -15,7 +15,8 @@
 ![React - Version](https://img.shields.io/badge/React-19+-blue?style=for-the-badge&logo=react)
 ![TypeScript - Version](https://img.shields.io/badge/TypeScript-5.7+-blue?style=for-the-badge&logo=typescript)
 ![Qdrant - Version](https://img.shields.io/badge/Qdrant-1.18+-red?style=for-the-badge&logo=qdrant)
-[![Generic badge](https://img.shields.io/badge/License-Apache-<COLOR>.svg?style=for-the-badge)](./LICENSE)
+[![Generic badge](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](./LICENSE)
+![Version](https://img.shields.io/badge/version-1.1-blue?style=for-the-badge)
 
 </div>
 
@@ -31,28 +32,36 @@
 - [快速开始](#快速开始)
 - [使用说明](#使用说明)
 - [项目结构](#项目结构)
+- [设计文档](#设计文档)
 - [许可证与致谢](#许可证与致谢)
 
 ---
 
 ## 概述
 
-**Medical AI Assistant** 是一个多 Agent 协作的医学 AI 咨询平台，通过 LangGraph 编排多个专业 Agent，提供医学文献检索、影像分析、网络搜索和对话咨询等功能。
+**StarCore MedLink** 是一个"个人健康 AI 伙伴"——不是医生，不是搜索引擎，而是记住你完整健康历史的智能管家。
 
-系统集成了**个人健康档案（PHR）管理**，用户的健康信息（基本资料、病史、用药记录等）会自动注入 AI 对话上下文，提供个性化的医学咨询体验。
+与通用 AI Chatbot 的根本区别在于**个性化层**：所有 AI 回答的基础不是通用知识，而是用户的个人健康记忆。
+
+### 系统三大记忆层
+
+| 记忆层 | 内容 | 作用 |
+|--------|------|------|
+| **个人记忆** | 健康档案、历史指标、用药记录、过敏史 | 所有回答的个性化基础 |
+| **医学记忆** | 文献库、临床指南、实时搜索 | 让每句话有据可查 |
+| **系统记忆** | 功能说明、操作指南 | 知道自己能做什么、不能做什么 |
 
 ### Agent 体系
 
 | Agent | 职责 |
 |-------|------|
-| **Conversation Agent** | 通用医学对话、健康咨询 |
-| **RAG Agent** | 基于向量库的医学文献检索与问答 |
-| **Web Search Agent** | 实时网络搜索，获取最新医学信息 |
-| **Brain Tumor Agent** | 脑肿瘤 MRI 影像分割 |
-| **Chest X-Ray Agent** | COVID-19 胸部 X 光分类 |
-| **Skin Lesion Agent** | 皮肤病变分割与分类 |
-
-通过 **置信度路由（Confidence-Based Routing）** 和 **Agent 间交接（Agent-to-Agent Handoff）**，系统在 RAG 检索结果置信度不足时自动切换至网络搜索，确保回答质量。
+| **AI 管家（决策中枢）** | 意图识别 → 按需检索个人健康事实 → 路由到专业 Agent |
+| **Conversation Agent** | 通用医学对话、健康咨询（注入个人健康上下文） |
+| **RAG Agent** | 医学文献检索 + 个人健康事实语义检索，混合重排序 |
+| **Web Search Agent** | 实时网络搜索，RAG 置信度不足时自动接管 |
+| **Brain Tumor Agent** | 脑肿瘤 MRI U-Net 分割，输出肿瘤占比 |
+| **Chest X-Ray Agent** | COVID-19 胸部 X 光 DenseNet121 分类 |
+| **Skin Lesion Agent** | 皮肤病变 U-Net 分割 |
 
 ---
 
@@ -70,20 +79,46 @@
 
 ## 系统架构
 
+```
+Entry
+  │
+  ▼
+analyze_input          ← 安全检查 + 图像分类（视觉 LLM）
+  │
+  ▼
+enrich_context         ← 健康意图检测 → 语义检索 personal_health_facts
+  │
+  ▼
+route_to_agent         ← 决策 LLM：基于意图 + 上下文选择 Agent
+  │
+  ├── CONVERSATION_AGENT    ← 注入个人健康上下文
+  ├── RAG_AGENT             ← Qdrant 混合检索 + Cross-Encoder 重排
+  ├── WEB_SEARCH_AGENT      ← Tavily 实时搜索
+  ├── BRAIN_TUMOR_AGENT     ← U-Net MRI 分割
+  ├── CHEST_XRAY_AGENT      ← DenseNet121 X 光分类
+  └── SKIN_LESION_AGENT     ← U-Net 皮肤病变分割
+  │
+  ▼
+apply_guardrails       ← 输出审查
+  │
+  ▼
+END
+```
+
 ![Technical Flow Chart](assets/final_medical_assistant_flowchart_light_rounded.png)
 
 ---
 
 ## 核心功能
 
-- **多 Agent 协作** — LangGraph 状态图编排 6 个专业 Agent，动态路由与任务分发
-- **高级 RAG 检索** — Docling 文档解析 + 语义分块 + Qdrant 混合检索 + Cross-Encoder 重排序
-- **医学影像分析** — 脑肿瘤 MRI、胸部 X 光（COVID-19）、皮肤病变三类影像诊断
-- **个人健康档案（PHR）** — 健康资料与日常指标管理，自动注入 AI 对话上下文
-- **网络搜索集成** — Tavily 实时搜索最新医学资讯
-- **语音交互** — Eleven Labs STT/TTS，支持语音输入与播报
-- **安全护栏** — 输入/输出 Guardrails，过滤有害内容和提示注入
-- **人机验证** — 医学影像诊断结果需人工确认
+- **个性化健康咨询** — 按需语义检索个人健康事实，非全量注入。闲聊不触发健康记忆，医学问题自动关联病史
+- **多 Agent 协作** — LangGraph 状态图编排 6 个专业 Agent，置信度路由 + Agent 间自动交接
+- **高级 RAG 检索** — Docling 文档解析 + Qdrant Dense + BM25 混合检索 + Cross-Encoder 重排序 + LLM Query Expansion
+- **医学影像分析** — 三类 CV 模型实际推理：脑肿瘤 MRI 分割、胸部 X 光分类、皮肤病变分割
+- **个人健康档案（PHR）** — 健康资料 + 日常指标管理 + 健康事实自动索引至 Qdrant
+- **网络搜索** — Tavily 实时搜索，查询词关联病史关键词
+- **语音交互** — Eleven Labs STT/TTS
+- **安全护栏** — 输入/输出 Guardrails
 
 ---
 
@@ -92,17 +127,17 @@
 | 层级 | 技术 |
 |------|------|
 | **后端框架** | FastAPI + Uvicorn |
-| **Agent 编排** | LangGraph + LangChain |
+| **Agent 编排** | LangGraph + LangChain（SQLite checkpoint 持久化） |
 | **前端** | React 19 + TypeScript + Vite + Tailwind CSS |
-| **LLM** | DashScope Qwen / OpenAI / DeepSeek (可切换) |
+| **LLM** | DashScope Qwen / OpenAI / DeepSeek（可切换） |
 | **视觉模型** | Qwen-VL / GPT-4o |
-| **向量数据库** | Qdrant (本地模式) |
+| **向量数据库** | Qdrant（本地模式，Dense + BM25 混合检索） |
+| **嵌入模型** | DashScope text-embedding-v3 |
 | **文档解析** | Docling |
 | **重排序** | HuggingFace Cross-Encoder (`ms-marco-TinyBERT-L-6`) |
-| **嵌入模型** | text-embedding-v3 |
 | **语音** | Eleven Labs API |
 | **网络搜索** | Tavily Search API |
-| **CV 模型** | PyTorch + torchvision (U-Net, ResNet) |
+| **CV 模型** | PyTorch + torchvision（U-Net ×2, DenseNet121） |
 
 ---
 
@@ -118,18 +153,16 @@
 
 ```bash
 git clone <your-repo-url>
-cd Medical-Assistant
+cd StarCore-MedLink
 ```
 
 ### 2. 后端安装
 
 ```bash
-# 创建虚拟环境
 python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate   # Windows
 
-# 安装依赖
 pip install -r requirements.txt
 ```
 
@@ -143,14 +176,14 @@ cp .env.example .env
 
 ```bash
 # 必填
-LLM_API_KEY=your-api-key         # DashScope / OpenAI / DeepSeek
-LLM_MODEL=qwen-plus              # 可选 gpt-4o / deepseek-chat
-VISION_MODEL=qwen-vl-plus        # 多模态视觉模型
+LLM_API_KEY=your-api-key
+LLM_MODEL=qwen-plus
+VISION_MODEL=qwen-vl-plus
 
 # 可选
-ELEVEN_LABS_API_KEY=             # 语音功能
-TAVILY_API_KEY=                  # 网络搜索
-HUGGINGFACE_TOKEN=               # Cross-Encoder 重排序
+ELEVEN_LABS_API_KEY=       # 语音功能
+TAVILY_API_KEY=             # 网络搜索
+HUGGINGFACE_TOKEN=          # Cross-Encoder 重排序
 ```
 
 > 默认使用阿里云 DashScope（Qwen 系列），切换到其他 LLM 只需修改 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
@@ -160,7 +193,7 @@ HUGGINGFACE_TOKEN=               # Cross-Encoder 重排序
 ```bash
 cd frontend
 npm install
-npm run build   # 构建生产版本
+npm run build
 cd ..
 ```
 
@@ -175,10 +208,7 @@ python app.py
 ### 6. （可选）注入 RAG 数据
 
 ```bash
-# 单文件
 python ingest_rag_data.py --file ./data/raw/your-document.pdf
-
-# 整个目录
 python ingest_rag_data.py --dir ./data/raw
 ```
 
@@ -186,13 +216,12 @@ python ingest_rag_data.py --dir ./data/raw
 
 ## 使用说明
 
-- **AI 咨询** — 在聊天界面输入医学问题，Agent 自动路由到合适的处理单元
-- **影像分析** — 上传 MRI / X 光 / 皮肤病变图片，由专门的 CV Agent 诊断
-- **健康档案** — 填写个人健康资料和日常指标，AI 咨询时自动引用
+- **AI 咨询** — 在聊天界面输入医学问题，系统自动识别意图、检索个人健康事实、路由到合适的 Agent
+- **影像分析** — 选择图片 → 输入描述 → 点发送，CV Agent 进行实际模型推理
+- **健康档案** — 在 Dashboard 填写个人资料和日常指标，数据自动索引为可检索的健康事实
 - **语音输入** — 按住麦克风按钮录音，自动转文字后发送
-- **RAG 检索** — 注入医学文献后，系统优先从知识库检索回答
 
-> 首次运行可能较慢，需要下载 CV 模型和 Cross-Encoder 模型。
+> 首次运行需下载 CV 模型权重和 Cross-Encoder 模型，可能较慢。
 
 ---
 
@@ -200,38 +229,46 @@ python ingest_rag_data.py --dir ./data/raw
 
 ```
 StarCore-MedLink/
-├── agents/                     # 多 Agent 系统
-│   ├── agent_decision.py       # Agent 编排与路由
-│   ├── guardrails/             # 输入输出安全护栏
-│   ├── rag_agent/              # RAG 检索 Agent
-│   ├── web_search_processor_agent/  # 网络搜索 Agent
-│   └── image_analysis_agent/   # 医学影像分析 Agent
-├── frontend/                   # React 前端
-│   ├── src/
-│   │   ├── components/         # UI 组件
-│   │   └── api/                # API 客户端
-│   └── package.json
-├── app.py                      # FastAPI 后端入口
-├── config.py                   # 配置中心
-├── health_db.py                # 个人健康档案（PHR）
-├── ingest_rag_data.py          # RAG 数据注入 CLI
-├── logging_config.py           # 日志配置
-├── requirements.txt            # Python 依赖
-├── assets/                     # 截图与架构图
-├── sample_images/              # 测试用医学影像
-└── .env.example                # 环境变量模板
+├── agents/                         # 多 Agent 系统
+│   ├── agent_decision.py           # Agent 编排、意图路由、enrich_context
+│   ├── fact_indexer.py             # 个人健康事实 Qdrant 索引与检索
+│   ├── guardrails/                 # 输入输出安全护栏
+│   ├── rag_agent/                  # RAG 检索 Agent（Qdrant + 重排）
+│   ├── web_search_processor_agent/ # 网络搜索 Agent
+│   └── image_analysis_agent/      # 医学影像分析（3 个 CV Agent）
+│       ├── brain_tumor_agent/      # U-Net 脑肿瘤分割
+│       ├── chest_xray_agent/       # DenseNet121 X 光分类
+│       └── skin_lesion_agent/      # U-Net 皮肤病变分割
+├── utils/                          # 工具模块
+│   └── dashscope_embeddings.py     # DashScope 嵌入模型封装
+├── frontend/                       # React SPA 前端
+│   └── src/components/             # ChatPage, Dashboard, HealthProfile 等
+├── data/                           # 数据库与向量存储
+│   ├── raw/                        # RAG 待注入文档
+│   └── qdrant_db/                  # Qdrant 本地持久化
+├── app.py                          # FastAPI 入口
+├── config.py                       # 配置中心
+├── health_db.py                    # 个人健康档案（PHR）SQLite 存储
+├── ingest_rag_data.py              # RAG 数据注入 CLI
+├── logging_config.py               # 日志配置
+├── Dockerfile                      # Docker 部署
+├── requirements.txt                # Python 依赖
+├── assets/                         # 截图与架构图
+└── sample_images/                  # 测试用医学影像
 ```
 
 ---
 
 ## 许可证与致谢
 
-本项目基于 [Apache 2.0 License](LICENSE)。
+本项目基于 [MIT License](LICENSE)。
 
 Forked from [souvikmajumder26/Multi-Agent-Medical-Assistant](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant)，在此基础上进行了以下主要改动：
 
 - 前端从 HTML/CSS/JS 重构为 **React + TypeScript + Vite + Tailwind CSS** SPA
 - LLM 从 Azure OpenAI 切换为 **DashScope Qwen 系列**（可配置切换）
+- 新增 **个人健康事实语义检索**（Qdrant `personal_health_facts` collection + `enrich_context` 节点）
 - 新增 **个人健康档案（PHR）** 系统，支持健康资料和日常指标管理
-- 新增健康上下文自动注入 AI 对话的能力
+- Brain Tumor / Skin Lesion Agent 从占位文本改为**实际 CV 模型推理**
+- 新增 **FactIndexer**：健康事实自动 embedding → Qdrant 索引
 - 升级 LangChain/LangGraph 至 1.x 版本
