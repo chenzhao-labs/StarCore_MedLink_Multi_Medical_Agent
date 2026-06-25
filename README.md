@@ -259,16 +259,6 @@ StarCore-MedLink/
 
 ---
 
-## 许可证与致谢
+## 许可证
 
 本项目基于 [MIT License](LICENSE)。
-
-Forked from [souvikmajumder26/Multi-Agent-Medical-Assistant](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant)，在此基础上进行了以下主要改动：
-
-- 前端从 HTML/CSS/JS 重构为 **React + TypeScript + Vite + Tailwind CSS** SPA
-- LLM 从 Azure OpenAI 切换为 **DashScope Qwen 系列**（可配置切换）
-- 新增 **个人健康事实语义检索**（Qdrant `personal_health_facts` collection + `enrich_context` 节点）
-- 新增 **个人健康档案（PHR）** 系统，支持健康资料和日常指标管理
-- Brain Tumor / Skin Lesion Agent 从占位文本改为**实际 CV 模型推理**
-- 新增 **FactIndexer**：健康事实自动 embedding → Qdrant 索引
-- 升级 LangChain/LangGraph 至 1.x 版本
