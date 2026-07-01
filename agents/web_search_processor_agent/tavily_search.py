@@ -5,19 +5,14 @@ class TavilySearchAgent:
     """
     Processes general documents for the RAG system with context-aware chunking.
     """
-    def __init__(self):
-        """
-        Initialize the Tavily search agent.
-        
-        Args:
-            query: User query
-        """
-        pass
+    def __init__(self, tavily_api_key: str = ""):
+        self.tavily_api_key = tavily_api_key
 
     def search_tavily(self, query: str) -> str:
         """Perform a general web search using Tavily API."""
-
-        tavily_search = TavilySearchResults(max_results = 5)
+        import os
+        api_key = self.tavily_api_key or os.getenv("TAVILY_API_KEY", "")
+        tavily_search = TavilySearchResults(tavily_api_key=api_key, max_results=5)
 
         # url = "https://api.tavily.com/search"
         # params = {

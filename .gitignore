@@ -184,5 +184,6 @@ cython_debug/
 
 # ignore below since it gets updated on every local run
 uploads/
-data/
+data/*
+!data/system_docs/
 .claude/

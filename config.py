@@ -47,9 +47,11 @@ def _create_vision_llm(temperature=0.1):
 
 
 def _create_embeddings():
+    dims = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
     return DashScopeEmbeddings(
         model=os.getenv("EMBEDDING_MODEL", "text-embedding-v3"),
         api_key=LLM_API_KEY,
+        dimensions=dims,
     )
 
 
@@ -148,6 +150,7 @@ class APIConfig:
     def __init__(self):
         self.host = os.getenv("HOST", "0.0.0.0")
         self.port = int(os.getenv("PORT", "8080"))
+        self.base_url = os.getenv("BASE_URL") or f"http://localhost:{self.port}"
         self.debug = True
         self.rate_limit = 10
         self.max_image_upload_size = 5

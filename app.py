@@ -517,7 +517,7 @@ def api_update_profile(profile_id: str, data: HealthProfileUpdate):
 
 @app.post("/health/logs/{profile_id}")
 def api_add_log(profile_id: str, entry: HealthLogEntry):
-    return health_db.add_log(entry.log_type, entry.value, entry.note)
+    return health_db.add_log(entry.log_type, entry.value, entry.note, profile_id=profile_id)
 
 
 @app.get("/health/logs")

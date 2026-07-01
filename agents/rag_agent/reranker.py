@@ -26,6 +26,7 @@ class Reranker:
             self.logger.info(f"Loading reranker model: {self.model_name}")
             self.model = CrossEncoder(self.model_name)
             self.top_k = config.rag.reranker_top_k
+            self.base_url = config.api.base_url
         except Exception as e:
             self.logger.error(f"Error loading reranker model: {e}")
             raise
@@ -106,7 +107,7 @@ class Reranker:
                     # Create picture path based on document source and counter
                     doc_basename = os.path.splitext(doc['source'])[0]  # Remove file extension
                     # picture_path = Path(os.path.abspath(parsed_content_dir + "/" + f"{doc_basename}-picture-{counter_value}.png")).as_uri()
-                    picture_path = os.path.join("http://localhost:8000/", parsed_content_dir + "/" + f"{doc_basename}-picture-{counter_value}.png")
+                    picture_path = self.base_url.rstrip("/") + "/" + parsed_content_dir.strip("/") + "/" + f"{doc_basename}-picture-{counter_value}.png"
                     picture_reference_paths.append(picture_path)
             
             return reranked_docs, picture_reference_paths

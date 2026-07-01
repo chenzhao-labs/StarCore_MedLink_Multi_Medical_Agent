@@ -1,12 +1,34 @@
 """
 Personal Health Record — SQLite storage for health profiles and daily logs.
+
+Writes trigger fact re-indexing via registered hooks (DESIGN.md §4).
 """
 import sqlite3
 import json
 import os
 import uuid
+import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Callable, List
+
+logger = logging.getLogger(__name__)
+
+# ── Write hooks (called after profile/log mutations) ──
+_write_hooks: List[Callable[[str], None]] = []
+
+
+def register_write_hook(callback: Callable[[str], None]) -> None:
+    """Register a callback(profile_id) to be invoked after each profile/log write."""
+    _write_hooks.append(callback)
+    logger.info("Registered write hook: %s", callback)
+
+
+def _notify_write(profile_id: str) -> None:
+    for cb in _write_hooks:
+        try:
+            cb(profile_id)
+        except Exception:
+            logger.exception("Write hook %s failed", cb)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "health.db")
 
@@ -117,12 +139,13 @@ def update_profile(profile_id: str, data: dict) -> dict:
     )
     c.commit()
     c.close()
+    _notify_write(profile_id)
     return get_profile(profile_id)
 
 
 # ─── Health Logs ───────────────────────────────────────────────
 
-def add_log(log_type: str, value: dict, note: str = "") -> dict:
+def add_log(log_type: str, value: dict, note: str = "", profile_id: str = "") -> dict:
     log_id = str(uuid.uuid4())
     now = _now()
     c = _connect()
@@ -132,6 +155,8 @@ def add_log(log_type: str, value: dict, note: str = "") -> dict:
     )
     c.commit()
     c.close()
+    if profile_id:
+        _notify_write(profile_id)
     return {"id": log_id, "log_type": log_type, "value": value, "note": note, "recorded_at": now}
 
 

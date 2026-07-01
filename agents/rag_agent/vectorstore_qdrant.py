@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import Distance, SparseVectorParams, VectorParams
+from utils.qdrant_client import get_qdrant_client
 
 class VectorStore:
     """
@@ -21,10 +22,10 @@ class VectorStore:
         self.retrieval_top_k = config.rag.top_k
         self.vector_search_type = config.rag.vector_search_type
         self.vectorstore_local_path = config.rag.vector_local_path
+        self.base_url = config.api.base_url
 
         # Use the singleton client instead of creating a new one
-        # self.client = QdrantClientManager.get_client(config)
-        self.client = QdrantClient(path=self.vectorstore_local_path)
+        self.client = get_qdrant_client(self.vectorstore_local_path)
 
     def _does_collection_exist(self) -> bool:
         """Check if the collection already exists in Qdrant."""
@@ -96,19 +97,43 @@ class VectorStore:
                     metadata={
                         "source": os.path.basename(document_path),
                         "doc_id": doc_ids[id_idx],
-                        "source_path": os.path.join("http://localhost:8000/", document_path)
+                        "source_path": self.base_url.rstrip("/") + "/" + document_path.lstrip("/").replace("\\", "/")
                     }
                 )
             )
 
         sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
 
-        collection_exists = self._does_collection_exist()
-        if not collection_exists:
-            self._create_collection()
-            self.logger.info("Created new collection: %s", self.collection_name)
-        else:
-            self.logger.info("Collection %s already exists, will upsert documents", self.collection_name)
+        # Determine ACTUAL embedding dimension from the model (not config)
+        test_vec = self.embedding_model.embed_query("dimension test")
+        actual_dim = len(test_vec)
+
+        # If collection exists with wrong dimensions, drop it
+        if self._does_collection_exist():
+            try:
+                info = self.client.get_collection(self.collection_name)
+                existing_dim = info.config.params.vectors["dense"].size
+                if existing_dim != actual_dim:
+                    self.logger.warning(
+                        "Collection %s has dim %d but embedding produces %d — recreating",
+                        self.collection_name, existing_dim, actual_dim,
+                    )
+                    self.client.delete_collection(self.collection_name)
+            except Exception:
+                pass
+
+        # Create collection with actual embedding dimension
+        if not self._does_collection_exist():
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config={
+                    "dense": VectorParams(size=actual_dim, distance=Distance.COSINE)
+                },
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams(index=models.SparseIndexParams(on_disk=False))
+                },
+            )
+            self.logger.info("Created new collection: %s (dim=%d)", self.collection_name, actual_dim)
 
         qdrant_vectorstore = QdrantVectorStore(
             client=self.client,

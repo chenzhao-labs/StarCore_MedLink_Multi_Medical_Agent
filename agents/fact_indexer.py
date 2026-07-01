@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, SparseVectorParams, VectorParams
+from utils.qdrant_client import get_qdrant_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class FactIndexer:
         self.embedding_model = config.rag.embedding_model
         self.embedding_dim = config.rag.embedding_dim
         self.vectorstore_path = config.rag.vector_local_path
-        self._client = QdrantClient(path=self.vectorstore_path)
+        self._client = get_qdrant_client(self.vectorstore_path)
 
     # ------------------------------------------------------------------
     # Collection lifecycle
@@ -89,6 +90,8 @@ class FactIndexer:
 
     def search(self, query: str, profile_id: str, k: int = 3) -> List[Dict[str, Any]]:
         """Retrieve top-k relevant health facts for a query, scoped to one profile."""
+        if not query or not query.strip():
+            return []
         if not self._collection_exists():
             return []
 

@@ -15,8 +15,10 @@ class DashScopeEmbeddings(Embeddings):
     compatibility issues with DashScope's OpenAI-compatible endpoint.
     """
 
-    def __init__(self, model: str = "text-embedding-v1", api_key: str = ""):
+    def __init__(self, model: str = "text-embedding-v1", api_key: str = "",
+                 dimensions: int = 1024):
         self.model = model
+        self.dimensions = dimensions
         dashscope.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -33,6 +35,7 @@ class DashScopeEmbeddings(Embeddings):
             resp = dashscope.TextEmbedding.call(
                 model=self.model,
                 input=batch,
+                dimension=self.dimensions,
             )
 
             output = resp.get("output")

@@ -23,6 +23,7 @@ from agents.image_analysis_agent import ImageAnalysisAgent
 from agents.guardrails.local_guardrails import LocalGuardrails
 from agents.streaming import TokenQueue, TokenCallback
 from agents.fact_indexer import FactIndexer
+from agents.system_knowledge_indexer import SystemKnowledgeIndexer
 import health_db
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -79,6 +80,40 @@ def _detect_health_intent(text: str) -> bool:
     return any(kw in text_lower for kw in _HEALTH_KEYWORDS)
 
 
+# ── System help intent detection (Phase 1.2: keyword-based) ──
+
+_SYSTEM_HELP_KEYWORDS = [
+    # 功能询问
+    "怎么用", "如何使用", "怎么操作", "使用说明", "使用教程", "使用指南",
+    "功能介绍", "能做什么", "有什么功能", "支持什么", "功能列表",
+    "怎么上传", "如何上传", "上传图片", "上传影像",
+    # 系统导航
+    "在哪里", "怎么找到", "怎么看", "在哪里看", "从哪里",
+    "怎么查看", "如何查看", "怎么打开",
+    # 帮助
+    "帮助", "教程", "指南", "说明文档", "help", "guide", "tutorial",
+    "不会用", "搞不懂", "不清楚怎么",
+    # 隐私与安全
+    "数据安全", "隐私", "安全吗", "加密", "数据存储",
+    "我的数据", "数据如何", "数据怎么",
+    # 技术局限
+    "限制", "局限", "不能", "不支持", "做不到", "局限性",
+    # 费用与配置
+    "收费", "免费", "价格", "费用", "需要什么", "配置要求",
+    "需要哪些", "API Key", "api key", "环境",
+    # English
+    "how to use", "how do i", "what can you do", "features",
+    "capabilities", "limitations", "privacy", "security",
+    "setup", "install", "configure", "requirements",
+]
+
+
+def _detect_system_help_intent(text: str) -> bool:
+    """Keyword-based system help intent detection."""
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in _SYSTEM_HELP_KEYWORDS)
+
+
 # Agent that takes the decision of routing the request further to correct task specific agent
 class AgentConfig:
     """Configuration settings for the agent decision system."""
@@ -87,22 +122,24 @@ class AgentConfig:
     CONFIDENCE_THRESHOLD = 0.85
     
     # System instructions for the decision agent
-    DECISION_SYSTEM_PROMPT = """You are an intelligent medical triage system that routes user queries to 
-    the appropriate specialized agent. Your job is to analyze the user's request and determine which agent 
+    DECISION_SYSTEM_PROMPT = """You are an intelligent medical triage system that routes user queries to
+    the appropriate specialized agent. Your job is to analyze the user's request and determine which agent
     is best suited to handle it based on the query content, presence of images, and conversation context.
 
     Available agents:
     1. CONVERSATION_AGENT - For general chat, greetings, and non-medical questions.
-    2. RAG_AGENT - For specific medical knowledge questions that can be answered from established medical literature. Currently ingested medical knowledge involves 'introduction to brain tumor', 'deep learning techniques to diagnose and detect brain tumors', 'deep learning techniques to diagnose and detect covid / covid-19 from chest x-ray'.
+    2. RAG_AGENT - For specific medical knowledge questions that can be answered from established medical literature.
     3. WEB_SEARCH_PROCESSOR_AGENT - For questions about recent medical developments, current outbreaks, or time-sensitive medical information.
     4. BRAIN_TUMOR_AGENT - For analysis of brain MRI images to detect and segment tumors.
     5. CHEST_XRAY_AGENT - For analysis of chest X-ray images to detect abnormalities.
     6. SKIN_LESION_AGENT - For analysis of skin lesion images to classify them as benign or malignant.
+    7. SYSTEM_HELP_AGENT - For questions about how to use this system: feature guides, privacy policy, technical limitations, FAQs, usage tutorials, or any navigation help.
 
     Make your decision based on these guidelines:
-    - If the user has not uploaded any image, always route to the conversation agent.
+    - If the user asks about how to use the system, what features are available, privacy/security, or technical limitations, route to SYSTEM_HELP_AGENT.
+    - If the user has not uploaded any image, always route to the conversation agent (unless it's a system help question).
     - If the user uploads a medical image, decide which medical vision agent is appropriate based on the image type and the user's query. If the image is uploaded without a query, always route to the correct medical vision agent based on the image type.
-    - If the user asks about recent medical developments or current health situations, use the web search pocessor agent.
+    - If the user asks about recent medical developments or current health situations, use the web search processor agent.
     - If the user asks specific medical knowledge questions, use the RAG agent.
     - For general conversation, greetings, or non-medical questions, use the conversation agent. But if image is uploaded, always go to the medical vision agents first.
 
@@ -130,6 +167,7 @@ class AgentState(MessagesState):
     bypass_routing: bool  # Flag to bypass agent routing for guardrails
     insufficient_info: bool  # Flag indicating RAG response has insufficient information
     enriched_context: Optional[str]  # Health facts retrieved on-demand (Phase 0.4)
+    detected_intent: Optional[str]  # Intent detected by enrich_context: "health" / "system_help" / None
     profile_id: Optional[str]  # User profile ID for scoped personal health search
 
 
@@ -153,6 +191,23 @@ def create_agent_graph():
     fact_indexer = FactIndexer(app_config)
     fact_indexer.ensure_collection()
 
+    # Register write hook: re-index facts after profile/log changes (DESIGN.md §4)
+    _hook_registered = getattr(create_agent_graph, "_hook_registered", False)
+    if not _hook_registered:
+        def _on_health_write(profile_id: str):
+            try:
+                facts = health_db.get_fact_chunks(profile_id)
+                if facts:
+                    fact_indexer.reindex_profile(profile_id, facts)
+            except Exception:
+                pass
+        health_db.register_write_hook(_on_health_write)
+        create_agent_graph._hook_registered = True  # type: ignore[attr-defined]
+
+    # Initialize SystemKnowledgeIndexer for system help retrieval (Phase 1.1)
+    sys_knowledge_indexer = SystemKnowledgeIndexer(app_config)
+    sys_knowledge_indexer.ensure_collection()
+
     # LLM
     decision_model = app_config.agent_decision.llm
     
@@ -169,10 +224,12 @@ def create_agent_graph():
     decision_chain = decision_prompt | decision_model | json_parser
     
     def enrich_context(state: AgentState) -> AgentState:
-        """Retrieve personal health facts + medical knowledge on-demand (Phase 0.4).
+        """Retrieve personal health facts + medical knowledge + system knowledge on-demand.
 
-        Only triggers for health-related queries. Non-health queries pass through.
-        Searches the personal_health_facts Qdrant collection scoped to the user profile.
+        Intent-based retrieval:
+        - Health queries → personal_health_facts + medical_assistance_rag
+        - System help   → system_knowledge
+        - Chat/other    → skip
         """
         current_input = state.get("current_input", "")
         input_text = ""
@@ -181,22 +238,48 @@ def create_agent_graph():
         elif isinstance(current_input, dict):
             input_text = current_input.get("text", "")
 
-        if not input_text or not _detect_health_intent(input_text):
+        if not input_text:
             return {**state, "enriched_context": None}
 
         profile_id = state.get("profile_id") or "default"
 
-        try:
-            facts = fact_indexer.search(input_text, profile_id, k=5)
-            if facts:
-                context_parts = [f"- {f['content']}" for f in facts]
-                enriched = "Personal health context (retrieved from your health profile):\n" + "\n".join(context_parts)
-            else:
-                enriched = None
-        except Exception:
-            enriched = None
+        # ── System help intent ──
+        if _detect_system_help_intent(input_text):
+            try:
+                results = sys_knowledge_indexer.search(input_text, k=5)
+                if results:
+                    parts = []
+                    for r in results:
+                        src = f" (来源: {r['source']})" if r.get("source") else ""
+                        parts.append(f"- {r['content']}{src}")
+                    enriched = (
+                        "System knowledge (retrieved from documentation):\n"
+                        + "\n".join(parts)
+                    )
+                else:
+                    enriched = None
+                # Mark intent so route_to_agent can use it
+                return {**state, "enriched_context": enriched, "profile_id": profile_id,
+                        "detected_intent": "system_help"}
+            except Exception:
+                return {**state, "enriched_context": None}
 
-        return {**state, "enriched_context": enriched, "profile_id": profile_id}
+        # ── Health intent ──
+        if _detect_health_intent(input_text):
+            try:
+                facts = fact_indexer.search(input_text, profile_id, k=5)
+                if facts:
+                    context_parts = [f"- {f['content']}" for f in facts]
+                    enriched = "Personal health context (retrieved from your health profile):\n" + "\n".join(context_parts)
+                else:
+                    enriched = None
+            except Exception:
+                enriched = None
+
+            return {**state, "enriched_context": enriched, "profile_id": profile_id,
+                    "detected_intent": "health"}
+
+        return {**state, "enriched_context": None}
 
     # Define graph state transformations
     def analyze_input(state: AgentState) -> AgentState:
@@ -409,7 +492,88 @@ def create_agent_graph():
             "output": response,
             "agent_name": "CONVERSATION_AGENT"
         }
-    
+
+    def run_system_help_agent(state: AgentState, config: RunnableConfig = None) -> AgentState:
+        """Handle system navigation and help questions (Phase 1.2).
+
+        Uses RAG over system_knowledge collection to answer questions about
+        features, usage, privacy, limitations, etc.
+        """
+        logger.info("Selected agent: SYSTEM_HELP_AGENT")
+
+        token_queue = None
+        if config and config.get("configurable", {}).get("token_queue"):
+            token_queue = config["configurable"]["token_queue"]
+
+        messages = state["messages"]
+        current_input = state["current_input"]
+
+        input_text = ""
+        if isinstance(current_input, str):
+            input_text = current_input
+        elif isinstance(current_input, dict):
+            input_text = current_input.get("text", "")
+
+        # Build conversation context
+        recent_context = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                recent_context += f"User: {msg.content}\n"
+            elif isinstance(msg, AIMessage):
+                recent_context += f"Assistant: {msg.content}\n"
+
+        # Retrieved system knowledge
+        enriched = state.get("enriched_context") or ""
+
+        system_help_prompt = f"""User query: {input_text}
+
+Recent conversation context:
+{recent_context}
+
+{enriched}
+
+You are StarCore MedLink's built-in help assistant. Your job is to help users understand and navigate this personal health AI system. You answer questions about features, how to use the system, privacy, limitations, and FAQs.
+
+### Guidelines:
+1. **Be helpful and concise** — answer the user's question directly.
+2. **Use the system knowledge provided above** — it contains authoritative information about this system. Cite the source document when relevant.
+3. **If the retrieved knowledge doesn't cover the question** — be honest about what you don't know, and suggest the user check the project documentation or GitHub repository.
+4. **For medical questions** — remind the user that you're the system help assistant, not a medical advisor. Suggest they ask their medical question in a general chat instead.
+5. **Tone** — friendly, professional, and patient. This user is trying to learn how to use the system.
+
+### What you cover:
+- Feature explanations (影像分析、健康档案、语音交互 etc.)
+- Usage instructions (how to upload images, how to record health data)
+- Privacy and data security questions
+- Technical limitations and requirements
+- FAQ answers
+- Navigation guidance
+
+### What you don't cover:
+- Medical diagnosis or advice (redirect to general chat)
+- Technical debugging of the source code
+- Account/billing issues (this is open-source software)
+
+System Help Response:"""
+
+        if token_queue:
+            callback = TokenCallback(token_queue)
+            chunks = []
+            for chunk in app_config.conversation.llm.stream(
+                system_help_prompt, config={"callbacks": [callback]}
+            ):
+                chunks.append(chunk)
+            full_text = "".join(c.content for c in chunks if c.content)
+            response = AIMessage(content=full_text)
+        else:
+            response = app_config.conversation.llm.invoke(system_help_prompt)
+
+        return {
+            **state,
+            "output": response,
+            "agent_name": "SYSTEM_HELP_AGENT"
+        }
+
     def run_rag_agent(state: AgentState, config: RunnableConfig = None) -> AgentState:
         """Handle medical knowledge queries using RAG."""
         # Initialize the RAG agent
@@ -487,7 +651,7 @@ def create_agent_graph():
         logger.info("Insufficient info flag set to: %s", insufficient_info)
 
         # Store RAG output ONLY if confidence is high
-        if retrieval_confidence >= config.rag.min_retrieval_confidence:
+        if retrieval_confidence >= app_config.rag.min_retrieval_confidence:
             # response_output = response["response"]
             response_output = AIMessage(content=response_text)
         else:
@@ -757,6 +921,7 @@ def create_agent_graph():
     workflow.add_node("enrich_context", enrich_context)
     workflow.add_node("route_to_agent", route_to_agent)
     workflow.add_node("CONVERSATION_AGENT", run_conversation_agent)
+    workflow.add_node("SYSTEM_HELP_AGENT", run_system_help_agent)
     workflow.add_node("RAG_AGENT", run_rag_agent)
     workflow.add_node("WEB_SEARCH_PROCESSOR_AGENT", run_web_search_processor_agent)
     workflow.add_node("BRAIN_TUMOR_AGENT", run_brain_tumor_agent)
@@ -788,6 +953,7 @@ def create_agent_graph():
         lambda x: x["next"],
         {
             "CONVERSATION_AGENT": "CONVERSATION_AGENT",
+            "SYSTEM_HELP_AGENT": "SYSTEM_HELP_AGENT",
             "RAG_AGENT": "RAG_AGENT",
             "WEB_SEARCH_PROCESSOR_AGENT": "WEB_SEARCH_PROCESSOR_AGENT",
             "BRAIN_TUMOR_AGENT": "BRAIN_TUMOR_AGENT",
@@ -799,6 +965,7 @@ def create_agent_graph():
     
     # Connect agent outputs to validation check
     workflow.add_edge("CONVERSATION_AGENT", "check_validation")
+    workflow.add_edge("SYSTEM_HELP_AGENT", "check_validation")
     # workflow.add_edge("RAG_AGENT", "check_validation")
     workflow.add_edge("WEB_SEARCH_PROCESSOR_AGENT", "check_validation")
     workflow.add_conditional_edges("RAG_AGENT", confidence_based_routing)
@@ -838,6 +1005,7 @@ def init_agent_state() -> AgentState:
         "bypass_routing": False,
         "insufficient_info": False,
         "enriched_context": None,
+        "detected_intent": None,
         "profile_id": None,
     }
 
